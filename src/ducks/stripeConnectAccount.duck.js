@@ -1,6 +1,6 @@
 // This file deals with Flex API which will create Stripe Custom Connect accounts
 // from given bank_account tokens.
-
+import config from '../config';
 import { storableError } from '../util/errors';
 import * as log from '../util/log';
 
@@ -154,16 +154,36 @@ export const getAccountLinkSuccess = () => ({
 // ================ Thunks ================ //
 
 export const createStripeAccount = params => (dispatch, getState, sdk) => {
-  const country = params.country;
-  const bankAccountToken = params.bankAccountToken;
+  if (typeof window === 'undefined' || !window.Stripe) {
+    throw new Error('Stripe must be loaded for submitting PayoutPreferences');
+  }
+  const stripe = window.Stripe(config.stripe.publishableKey);
+
+  const { country, accountType, bankAccountToken, businessProfileMCC, businessProfileURL } = params;
+
+  const accountInfo = {
+    business_type: accountType,
+    tos_shown_and_accepted: true,
+  };
 
   dispatch(stripeAccountCreateRequest());
 
-  return sdk.stripeAccount
-    .create(
-      { country, bankAccountToken, requestedCapabilities: ['card_payments', 'transfers'] },
-      { expand: true }
-    )
+  return stripe
+    .createToken('account', accountInfo)
+    .then(response => {
+      const accountToken = response.token.id;
+      return sdk.stripeAccount.create(
+        {
+          country,
+          accountToken,
+          bankAccountToken,
+          requestedCapabilities: ['card_payments', 'transfers'],
+          businessProfileMCC,
+          businessProfileURL,
+        },
+        { expand: true }
+      );
+    })
     .then(response => {
       const stripeAccount = response.data.data;
       dispatch(stripeAccountCreateSuccess(stripeAccount));

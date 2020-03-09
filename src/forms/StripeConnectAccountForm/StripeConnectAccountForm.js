@@ -6,12 +6,16 @@ import { Form as FinalForm } from 'react-final-form';
 import arrayMutators from 'final-form-arrays';
 import classNames from 'classnames';
 import config from '../../config';
+import routeConfiguration from '../../routeConfiguration';
+import { createResourceLocatorString } from '../../util/routes';
 import { isStripeError } from '../../util/errors';
 import * as validators from '../../util/validators';
 import {
   Button,
   InlineTextButton,
+  ExternalLink,
   FieldSelect,
+  FieldRadioButton,
   Form,
   StripeBankAccountTokenInputField,
 } from '../../components';
@@ -34,47 +38,118 @@ const countryCurrency = countryCode => {
   return country.currency;
 };
 
+const stripeConnectedAccountTermsLink = (
+  <ExternalLink href="https://stripe.com/connect-account/legal" className={css.termsLink}>
+    <FormattedMessage id="StripeConnectAccountForm.stripeConnectedAccountTermsLink" />
+  </ExternalLink>
+);
+
 const CreateStripeAccountFields = props => {
-  const { disabled, countryLabel, values, intl } = props;
+  const { disabled, countryLabel, showAsRequired, values, intl, form, currentUserId } = props;
+
+  /*
+  We pass some default values to Stripe when creating a new Stripe account in order to reduce couple of steps from Connect Onboarding form.
+
+  - businessProfileURL: user's profile URL (can be edited through Connect Onboarding)
+  - businessProfileMCC: default MCC code from stripe-config.js (can be edited through Connect Onboarding)
+  - accountToken (https://stripe.com/docs/connect/account-tokens) with following information:
+    * accountType: individual or business
+    * tos_shown_and_accepted: true
+
+  Only country and bank account token are mandatory values. If you decide to remove the additional default values listed here, remember to update the `createStripeAccount` function in `ducks/stripeConnectAccount.duck.js`.
+
+  */
+
+  const hasBusinessURL = values && values.businessProfileURL;
+  // Use user profile page as business_url on this marketplace
+  // or just fake it if it's dev environment using Stripe test endpoints
+  if (!hasBusinessURL && currentUserId) {
+    const pathToProfilePage = uuid =>
+      createResourceLocatorString('ProfilePage', routeConfiguration(), { id: uuid }, {});
+    const defaultBusinessURL =
+      config && config.canonicalRootURL && !config.dev
+        ? `${config.canonicalRootURL}${pathToProfilePage(currentUserId.uuid)}`
+        : `https://test-marketplace.com${pathToProfilePage(currentUserId.uuid)}`;
+
+    form.change('businessProfileURL', defaultBusinessURL);
+  }
+
+  const hasMCC = values && values.businessProfileMCC;
+  // Use default merchant category code (MCC) from stripe-config.js
+  if (!hasMCC && config.stripe.defaultMCC) {
+    const defaultBusinessProfileMCC = config.stripe.defaultMCC;
+    form.change('businessProfileMCC', defaultBusinessProfileMCC);
+  }
+
   const country = values.country;
   const countryRequired = validators.required(
     intl.formatMessage({
       id: 'StripeConnectAccountForm.countryRequired',
     })
   );
-  return (
-    <div className={css.sectionContainer}>
-      <FieldSelect
-        id="country"
-        name="country"
-        disabled={disabled}
-        className={css.selectCountry}
-        autoComplete="country"
-        label={countryLabel}
-        validate={countryRequired}
-      >
-        <option disabled value="">
-          {intl.formatMessage({ id: 'StripeConnectAccountForm.countryPlaceholder' })}
-        </option>
-        {supportedCountries.map(c => (
-          <option key={c} value={c}>
-            {intl.formatMessage({ id: `StripeConnectAccountForm.countryNames.${c}` })}
-          </option>
-        ))}
-      </FieldSelect>
 
-      {country ? (
-        <StripeBankAccountTokenInputField
-          className={css.bankDetailsStripeField}
+  const individualAccountLabel = intl.formatMessage({
+    id: 'StripeConnectAccountForm.individualAccount',
+  });
+
+  const companyAccountLabel = intl.formatMessage({ id: 'StripeConnectAccountForm.companyAccount' });
+
+  return (
+    <>
+      <div className={css.sectionContainer}>
+        <h3 className={css.subTitle}>
+          <FormattedMessage id="StripeConnectAccountForm.accountTypeTitle" />
+        </h3>
+        <div className={css.radioButtonRow}>
+          <FieldRadioButton
+            id="individual"
+            name="accountType"
+            label={individualAccountLabel}
+            value="individual"
+            showAsRequired={showAsRequired}
+          />
+          <FieldRadioButton
+            id="company"
+            name="accountType"
+            label={companyAccountLabel}
+            value="company"
+            showAsRequired={showAsRequired}
+          />
+        </div>
+      </div>
+      <div className={css.sectionContainer}>
+        <FieldSelect
+          id="country"
+          name="country"
           disabled={disabled}
-          name="bankAccountToken"
-          formName="StripeConnectAccountForm"
-          country={country}
-          currency={countryCurrency(country)}
-          validate={validators.required(' ')}
-        />
-      ) : null}
-    </div>
+          className={css.selectCountry}
+          autoComplete="country"
+          label={countryLabel}
+          validate={countryRequired}
+        >
+          <option disabled value="">
+            {intl.formatMessage({ id: 'StripeConnectAccountForm.countryPlaceholder' })}
+          </option>
+          {supportedCountries.map(c => (
+            <option key={c} value={c}>
+              {intl.formatMessage({ id: `StripeConnectAccountForm.countryNames.${c}` })}
+            </option>
+          ))}
+        </FieldSelect>
+
+        {country ? (
+          <StripeBankAccountTokenInputField
+            className={css.bankDetailsStripeField}
+            disabled={disabled}
+            name="bankAccountToken"
+            formName="StripeConnectAccountForm"
+            country={country}
+            currency={countryCurrency(country)}
+            validate={validators.required(' ')}
+          />
+        ) : null}
+      </div>
+    </>
   );
 };
 
@@ -166,7 +241,9 @@ const StripeConnectAccountFormComponent = props => {
           stripeBankAccountLastDigits,
           submitButtonText,
           values,
+          form,
           stripeConnected,
+          currentUserId,
         } = fieldRenderProps;
 
         const accountDataLoaded = stripeConnected && stripeAccountFetched && savedCountry;
@@ -184,6 +261,8 @@ const StripeConnectAccountFormComponent = props => {
           [css.disabled]: disabled,
         });
 
+        const showAsRequired = pristine;
+
         // If the user doesn't have Stripe connected account,
         // show fields for country and bank account.
         // Otherwise, show only possibility the edit bank account
@@ -196,6 +275,9 @@ const StripeConnectAccountFormComponent = props => {
             supportedCountries={supportedCountries}
             values={values}
             intl={intl}
+            showAsRequired={showAsRequired}
+            form={form}
+            currentUserId={currentUserId}
           />
         ) : (
           <UpdateStripeAccountFields
@@ -214,17 +296,26 @@ const StripeConnectAccountFormComponent = props => {
         // Don't show the submit button while fetching the Stripe account data
         const submitButtonMaybe =
           !stripeConnected || accountDataLoaded ? (
-            <Button
-              className={css.submitButton}
-              type="submit"
-              inProgress={submitInProgress}
-              disabled={submitDisabled}
-              ready={ready}
-            >
-              {submitButtonText || (
-                <FormattedMessage id="StripeConnectAccountForm.submitButtonText" />
-              )}
-            </Button>
+            <>
+              <p className={css.termsText}>
+                <FormattedMessage
+                  id="StripeConnectAccountForm.stripeToSText"
+                  values={{ stripeConnectedAccountTermsLink }}
+                />
+              </p>
+
+              <Button
+                className={css.submitButton}
+                type="submit"
+                inProgress={submitInProgress}
+                disabled={submitDisabled}
+                ready={ready}
+              >
+                {submitButtonText || (
+                  <FormattedMessage id="StripeConnectAccountForm.submitButtonText" />
+                )}
+              </Button>
+            </>
           ) : null;
 
         // If the Stripe publishable key is not set up, don't show the form
